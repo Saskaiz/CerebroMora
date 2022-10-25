@@ -1,10 +1,10 @@
 /***************************************************
-Primer prototipo desarrollado para el sistema de control
-comisionado por Instrumentos Mora SAS.
-Desarrollado por: Juan David Castillo S.
-Iniciado el 23 de Agosto de 2022
+  Primer prototipo desarrollado para el sistema de control
+  comisionado por Instrumentos Mora SAS.
+  Desarrollado por: Juan David Castillo S.
+  Iniciado el 23 de Agosto de 2022
 
-Script planeado para Arduino Uno
+  Script planeado para Arduino Uno
  ****************************************************/
 
 // Librerias y definiciones para dibujar en la pantalla
@@ -35,6 +35,9 @@ DmTouchCalibration calibration = DmTouchCalibration(&tft, &dmTouch);
 #include <DS3231.h>
 RTClib myRTC;
 
+// Libreria para el manejo de la permamencia de los datos.
+#include <EEPROM.h>
+
 void setup() {
   Serial.begin(57600); // Iniciar comunicacion serial, 57,600 Baud
   Wire.begin(); // Iniciar comunicacion con el RTC
@@ -48,23 +51,35 @@ void setup() {
   digitalWrite(T_CS, HIGH);
   digitalWrite(SD_CS, HIGH);
   digitalWrite(F_CS, HIGH);
-  
+
   tft.init(); // Iniciar controlador de DFRobot
   dmTouch.init(); // Inicializar el control de tacto
   CalibrationMatrix calibrationMatrix = calibration.getDefaultCalibrationData(DmTouch::DM_TFT28_105);
   dmTouch.setCalibrationMatrix(calibrationMatrix); // Cargar calibracion TFT
 
   tftA.begin(); // Inicializar el display segun Adafruit
-  tftA.setRotation(orientation); 
+  tftA.setRotation(orientation);
+
+  // Primero, se revisa si el Arduino tiene memoria de ya haber sido configurado
+  eeAddress = 0; //Ubicacion de este dato en EEPROM.
+  bool setConfig = false;
+  EEPROM.get(eeAddress, setConfig);
+  eeAddress += sizeof(setConfig);
+
+  if (!setConfig) {
+    
+  }
+
+
   printMainScreen();
 }
 
 void loop() {
   uint16_t x, y = 0;
   bool touched = false;
-  
+
   if (dmTouch.isTouched()) {
-    dmTouch.readTouchData(x,y,touched);
+    dmTouch.readTouchData(x, y, touched);
     Serial.print(x);
     Serial.print(" ");
     Serial.println(y);
@@ -79,14 +94,14 @@ void printMainScreen() {
   // tftA.fillScreen(ILI9341_BLACK);
   tftA.setTextColor(ILI9341_RED);
   tftA.setCursor(0, 0);
-  
+
   tftA.setTextSize(3);
   tftA.println("MORAEQUIPOS S.A.S");
-  
   tftA.setTextColor(ILI9341_YELLOW);
   tftA.setTextSize(1);
-  tftA.println("Software ver. 1.0");
-  
+  tftA.println("Software ver. 1.1");
+  tftA.println("");
+
   tftA.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
   tftA.setTextSize(2);
   DateTime now = myRTC.now();
@@ -102,13 +117,8 @@ void printMainScreen() {
   tftA.print(':');
   tftA.print(now.second(), DEC);
   tftA.println();
-  
-  tftA.println("Fecha de inicio: ");
-  tftA.println("Dias transcurridos: ");
-  tftA.println("Volumen producido: ");
-  tftA.println("Detector de presion: ON");
-  tftA.setTextColor(ILI9341_RED);
-  tftA.println("Interruptor: OFF");
-  tftA.setTextColor(ILI9341_GREEN);
-  tftA.println("Fecha y hora actual: ");
+
+  tftA.print("UEPOCH: ");
+  tftA.println(now.unixtime());
+  tftA.println(sizeof(now.unixtime()));
 }
