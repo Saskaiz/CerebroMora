@@ -7,183 +7,222 @@
   Script planeado para Arduino Uno
  ****************************************************/
 
-// Librerias y definiciones para dibujar en la pantalla
-#include <Adafruit_GFX.h>
+// Librerias necesarias
 #include <SPI.h>
-#include <Wire.h>
+#include <Adafruit_GFX.h>
 #include <Adafruit_ILI9341.h>
-#define TFT_DC 9 // Valor por defecto para DC
-#define TFT_CS 10 // Valor por defecto para el pin CS
-Adafruit_ILI9341 tftA = Adafruit_ILI9341(TFT_CS, TFT_DC);
+#include <XPT2046_Touchscreen.h>
+#include <DS3231.h>
+#include <EEPROM.h>
+#include <BigNumber.h>
+#include "NDT.h"      // Libreria personal para el manejo de la recepcion de fecha y hora
 
-// Rotations 0,2 = portrait  : 0->USB=right,upper : 2->USB=left,lower
-// Rotations 1,3 = landscape : 1->USB=left,upper  : 3->USB=right,lower
-// Orientacion de la pantalla y dimensiones del teclado
-const byte rotation = 3; //(0->3)
+// Definicion de pines utilizados en la PCB
+#define CS_PIN 7
+#define TFT_RST 8
+#define TFT_DC 9
+#define TFT_CS 10
+#define in_TDS A0
+#define out_SW A1
+#define out_TDS A2
+#define in_encoder 2
+#define in_bat 3
+#define in_NC 4
+#define in_NO 5
 
-// Definiciones para la pantalla de cambio de tiempo
+// Declaracion de pantalla y sensor tactil
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
+XPT2046_Touchscreen ts(CS_PIN);
+DS3231 myRTC;
+
+// Declaracion del keypad para la pantalla de cambio de fecha y hora
 const byte row = 4;
 const byte col = 3;
 char *btnTitle[col * row] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "BK", "0", "OK"};
-#include "NDT.h"
-
-// Librerias y definiciones para detectar el tacto
-#include <DmTftSsd2119.h>
-#include <DmTftIli9341.h>
-#include <DmTftIli9325.h>
-#include <DmTouch.h>
-#include <utility/DmTouchCalibration.h>
-#define SD_CS   8
-#define F_CS    6
-#define T_CS    4
-#define T_IRQ   2
-DmTftIli9341 tft = DmTftIli9341();
-DmTouch dmTouch = DmTouch(DmTouch::DM_TFT28_105);
-DmTouchCalibration calibration = DmTouchCalibration(&tft, &dmTouch);
-
-// Librerias y definiciones para el manejo del RTC
-#include <DS3231.h>
-DS3231 myRTC;
-
-// Libreria y definiciones para el manejo de la permamencia de los datos.
-#include <EEPROM.h>
-#include <BigNumber.h>
-
-const byte eeAddress = 0;
-struct volumeRecord {
-  DateTime dateStarted;
-  BigNumber clicks;
-};
-volumeRecord currentRecord;
-bool recordExists;
 
 // Definiciones para la instrumentacion
-const byte TDSPin = A0;
-const byte encoderPin = 3;
-const byte NOPin = 5;
-const byte NCPin = 7;
 bool NO;
 bool NC;
+unsigned long memoryTimer = 0;
+const int memoryFreq = 60000;
 unsigned long TDS;
-unsigned long volumeCount;
+unsigned long TDSFlushTimer = 0;
+const int TDSFlushDuration = 20000;
+bool flushing = false;
+unsigned long volumen;
+BigNumber contador;
+DateTime fechaContador;
 
 void setup() {
+
+  // Serial.begin(9600);
   Wire.begin(); // Iniciar comunicacion con el RTC
-
-  // Establecer los pines relacionados a la pantalla como salidas de datos
+  pinMode(CS_PIN, OUTPUT);
   pinMode(TFT_CS, OUTPUT);
-  pinMode(T_CS, OUTPUT);
-  pinMode(SD_CS, OUTPUT);
-  pinMode(F_CS, OUTPUT);
-  pinMode(encoderPin, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(encoderPin), countVolume, CHANGE);
-  pinMode(NOPin, INPUT);
-  pinMode(NCPin, INPUT);
+  digitalWrite(CS_PIN, HIGH);
   digitalWrite(TFT_CS, HIGH);
-  digitalWrite(T_CS, HIGH);
-  digitalWrite(SD_CS, HIGH);
-  digitalWrite(F_CS, HIGH);
+  tft.begin();
+  ts.begin();
 
-  tft.init(); // Iniciar controlador de DFRobot
-  dmTouch.init(); // Inicializar el control de tacto
-  CalibrationMatrix calibrationMatrix = calibration.getDefaultCalibrationData(DmTouch::DM_TFT28_105);
-  dmTouch.setCalibrationMatrix(calibrationMatrix); // Cargar calibracion TFT
+  tft.setRotation(3);
+  ts.setRotation(3);
+  tft.fillScreen(ILI9341_BLACK);
 
-  tftA.begin(); // Inicializar el display segun Adafruit
-  tftA.setRotation(rotation);
+  pinMode(in_encoder, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(in_encoder), countVolume, CHANGE);
+
+  pinMode(in_NC, INPUT);
+  pinMode(in_NO, INPUT);
+  pinMode(in_TDS, INPUT);
+  pinMode(out_SW, OUTPUT);
+  pinMode(out_TDS, OUTPUT);
+  digitalWrite(out_SW, LOW);
+  digitalWrite(out_TDS, LOW);
+
+  EEPROM.get(0, contador);
+  if (isnan(contador)) {
+    contador = 0;
+    fechaContador = RTClib::now();
+    EEPROM.put(0, contador);
+    EEPROM.put(100, fechaContador);
+  }
+  else {
+    EEPROM.get(0, contador);
+    EEPROM.get(100, fechaContador);
+  }
+
 }
 
 void loop() {
-  NO = digitalRead(NOPin);
-  NC = digitalRead(NCPin);
-  TDS = analogRead(TDSPin) * 0.1127;
+  NO = digitalRead(in_NO);
+  NC = digitalRead(in_NC);
+  TDS = map(analogRead(in_TDS), 0, 1023, 0, 1086);
+  // Serial.println(TDS);
+
+  if (memoryTimer + memoryFreq < millis()) {
+    EEPROM.update(0, contador);
+    memoryTimer = millis();
+    // Serial.print("counter saved to EEPROM");
+  }
+
+  if (TDS >= 80.0 && flushing == false) {
+    TDSFlushTimer = millis();
+    flushing = true;
+    // Serial.println("Flushing enabled");
+  }
+  else if (flushing == true && TDSFlushTimer + TDSFlushDuration <= millis()) {
+    flushing = false;
+    // Serial.println("Flushing disabled");
+  }
+
+  digitalWrite(out_TDS, flushing);
+
+  if (!NO && NC) {
+    digitalWrite(out_SW, HIGH);
+  }
+  else {
+    digitalWrite(out_SW, LOW);
+  }
 
   printMainScreen();
-  uint16_t x, y = 0;
-  bool touched = false;
-  if (dmTouch.isTouched()) {
-    dmTouch.readTouchData(x, y, touched);
-    int cx = 320 - y; // en y se debe compensar la rotacion del display
-    int cy = x;
-    if (0 < cx < 160 && 190 < cy < 240) { // Se pulso el boton para cambiar la hora actual
+  if (ts.touched()) {
+    TS_Point p = catchPoint();
+
+    if ((0 < p.x && p.x < 160) &&  p.y < 50) { // Se pulso el boton para cambiar la hora actual
       changeTimeScreen();
-      tftA.fillScreen(BLACK);
+      tft.fillScreen(ILI9341_BLACK);
     }
-    if (0 < cx < 160 && 190 < cy < 240) { // Se pulso el boton para cambiar la hora actual
-      changeTimeScreen();
-      tftA.fillScreen(BLACK);
+    else if ((160 < p.x && p.x < 320) && p.y < 50) {
+      resetContScreen();
+      tft.fillScreen(ILI9341_BLACK);
     }
   }
 }
 
 void printMainScreen() {
-  tftA.setTextColor(RED);
-  tftA.setCursor(0, 0);
+  tft.setTextColor(ILI9341_RED);
+  tft.setCursor(0, 0);
 
-  tftA.setTextSize(3);
-  tftA.println("MORAEQUIPOS S.A.S");
-  tftA.setTextColor(YELLOW);
-  tftA.setTextSize(1);
-  tftA.println("Software ver. 1.3");
-  tftA.println("");
+  tft.setTextSize(3);
+  tft.println("MORAEQUIPOS S.A.S");
+  tft.setTextColor(ILI9341_YELLOW);
+  tft.setTextSize(1);
+  tft.println("Software ver. 1.5");
+  tft.println("");
 
-  tftA.setTextColor(GREEN, BLACK);
-  tftA.setTextSize(2);
+  tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+  tft.setTextSize(2);
   DateTime now = RTClib::now();
   char Buffer[20];
   sprintf(Buffer, "%02u-%02u-%04u ", now.day(), now.month(), now.year());
-  tftA.print(Buffer);
-  tftA.print(' ');
+  tft.print(Buffer);
+  tft.print(' ');
   sprintf(Buffer, "%02u:%02u:%02u ", now.hour(), now.minute(), now.second());
-  tftA.println(Buffer);
-  tftA.println("");
+  tft.println(Buffer);
+  tft.println("");
 
   if (NC) {
-    tftA.println("SENSOR PRESION MINIMA ON ");
+    tft.println("SENSOR PRESION MINIMA ON ");
   }
   else {
-    tftA.setTextColor(RED, BLACK);
-    tftA.println("SENSOR PRESION MINIMA OFF");
-    tftA.setTextColor(GREEN, BLACK);
+    tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+    tft.println("SENSOR PRESION MINIMA OFF");
+    tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
   }
+
   if (!NO) {
-    tftA.println("SENSOR SOBREPRESION OFF");
+    tft.println("SENSOR SOBREPRESION OFF");
   }
   else {
-    tftA.setTextColor(RED, BLACK);
-    tftA.println("SENSOR SOBREPRESION ON ");
-    tftA.setTextColor(GREEN, BLACK);
+    tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
+    tft.println("SENSOR SOBREPRESION ON ");
+    tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
   }
-  tftA.println("");
+
+  if (flushing) {
+    tft.setTextColor(ILI9341_YELLOW, ILI9341_BLACK);
+    tft.println("VALVULA LAVADO ON");
+    tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+  }
+  else {
+    tft.println("                 ");
+  }
+
   sprintf(Buffer, "TDS: %04u PPM", TDS);
-  tftA.println(Buffer);
+  tft.println(Buffer);
 
-  tftA.println("");
-  sprintf(Buffer, "VOLUMEN: %08u clicks", volumeCount);
-  tftA.println(Buffer);
+  tft.println("");
+  volumen = volumen * 1;
+  sprintf(Buffer, "VOLUMEN: %08u clicks", volumen);
+  tft.println(Buffer);
+  sprintf(Buffer, "DESDE: %02u-%02u-%04u ", fechaContador.day(), fechaContador.month(), fechaContador.year());
+  tft.print(Buffer);
+  tft.print(' ');
+  sprintf(Buffer, "%02u:%02u", fechaContador.hour(), fechaContador.minute());
+  tft.println(Buffer);
+  tft.println("");
 
-  tftA.drawRect(0, 190, 160, 50, WHITE);
-  tftA.setCursor(10, 210);
-  tftA.setTextColor(WHITE, BLACK);
-  tftA.print("Cambiar Hora");
+  tft.drawRect(0, 190, 160, 50, ILI9341_WHITE);
+  tft.setCursor(10, 210);
+  tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
+  tft.print("Cambiar Hora");
 
-  tftA.drawRect(160, 190, 160, 50, WHITE);
-  tftA.setCursor(175, 210);
-  tftA.setTextColor(WHITE, BLACK);
-  tftA.print("Reset Cont.");
+  tft.drawRect(160, 190, 160, 50, ILI9341_WHITE);
+  tft.setCursor(175, 210);
+  tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
+  tft.print("Reset Cont.");
 }
 
-void changeTimeScreen()
-{
-  tftA.fillScreen(BLUE);
-  tftA.setTextColor(WHITE, BLUE);
-  tftA.setTextSize(3);
+void changeTimeScreen() {
+  tft.fillScreen(ILI9341_BLUE);
+  tft.setTextColor(ILI9341_WHITE, ILI9341_BLUE);
+  tft.setTextSize(3);
 
   // Parametros de construccion de los botones
   int left, top;
-  int l = 10;
-  int t = 70;
-  int w = 50;
+  int l = 30;
+  int t = 60;
+  int w = 80;
   int h = 35;
   int hgap = 10;
   int vgap = 10;
@@ -196,28 +235,25 @@ void changeTimeScreen()
     {
       left = l + i * (w + vgap);
       top = t + j * (h + hgap);
-      tftA.drawRect( left, top, w, h, WHITE);
-      tftA.setCursor(left + 10, top + 8);
-      tftA.print(btnTitle[id]);
+      tft.drawRect( left, top, w, h, ILI9341_WHITE);
+      tft.setCursor(left + 10, top + 8);
+      tft.print(btnTitle[id]);
       id++;
     }
   }
 
-  tftA.setTextSize(2);
+  tft.setTextSize(2);
   NDT newDT(12);
 
   while (!newDT.getState() && !newDT.getCancel()) {
-    tftA.setCursor(0, 0);
-    tftA.println("Formato de fecha y hora:");
-    tftA.println("YYMMDDhhmmss");
-    tftA.println(newDT.currentInput());
+    tft.setCursor(0, 0);
+    tft.println("Formato de fecha y hora:");
+    tft.println("YYMMDDhhmmss");
+    tft.println(newDT.currentInput());
 
-    uint16_t x, y = 0;
-    bool touched = false;
-    if (dmTouch.isTouched()) {
-      dmTouch.readTouchData(x, y, touched);
-      int cx = 320 - y; // en y se debe compensar la rotacion del display
-      int cy = x;
+    if (ts.touched()) {
+      TS_Point p = catchPoint();
+      int cy = 240 - p.y;
 
       byte id = 0;
       int idwin = -1;
@@ -227,14 +263,14 @@ void changeTimeScreen()
         {
           left = l + i * (w + vgap);
           top = t + j * (h + hgap);
-          if ((left < cx && cx < left + w) && (top < cy && cy < top + h)) {
+          if ((left < p.x && p.x < left + w) && (top < cy && cy < top + h)) {
             idwin = id;
           }
           id++;
         }
       }
 
-      if (idwin <= 8) {
+      if (idwin >= 0 && idwin <= 8) {
         newDT.addNumber(idwin + 1);
       }
       else if (idwin == 10) {
@@ -242,20 +278,20 @@ void changeTimeScreen()
       }
       else if (idwin == 9) {
         newDT.rmNumber();
-        tftA.fillRect( 0, 0, 320, 60, BLUE);
+        tft.fillRect( 0, 0, 320, 60, ILI9341_BLUE);
       }
       else if (idwin == 11) {
         newDT.complete();
         if (!newDT.getState()) {
-          tftA.setCursor(0, 0);
-          tftA.setTextColor(RED, BLUE);
-          tftA.setTextSize(3);
-          tftA.fillRect( 0, 0, 320, 60, BLUE);
-          tftA.println("VALOR INVALIDO");
-          tftA.setTextColor(WHITE, BLUE);
-          tftA.setTextSize(2);
+          tft.setCursor(0, 0);
+          tft.setTextColor(ILI9341_RED, ILI9341_BLUE);
+          tft.setTextSize(3);
+          tft.fillRect( 0, 0, 320, 60, ILI9341_BLUE);
+          tft.println("VALOR INVALIDO");
+          tft.setTextColor(ILI9341_WHITE, ILI9341_BLUE);
+          tft.setTextSize(2);
           delay(3000);
-          tftA.fillRect( 0, 0, 320, 60, BLUE);
+          tft.fillRect( 0, 0, 320, 60, ILI9341_BLUE);
         }
       }
     }
@@ -272,6 +308,82 @@ void changeTimeScreen()
   }
 }
 
+void resetContScreen() {
+  tft.fillScreen(ILI9341_BLUE);
+  tft.setTextColor(ILI9341_WHITE, ILI9341_BLUE);
+  tft.setTextSize(2);
+  tft.setCursor(0, 0);
+
+  DateTime now = RTClib::now();
+  char Buffer[20];
+  sprintf(Buffer, "ULTIMA FECHA: %02u-%02u-%04u", fechaContador.day(), fechaContador.month(), fechaContador.year());
+  tft.println(Buffer);
+  sprintf(Buffer, "ULTIMA HORA: %02u:%02u:%02u", fechaContador.hour(), fechaContador.minute(), fechaContador.second());
+  tft.println(Buffer);
+  sprintf(Buffer, "VOLUMEN: %08u clicks", volumen);
+  tft.println(Buffer);
+  tft.println("");
+
+  tft.setTextColor(ILI9341_YELLOW, ILI9341_BLUE);
+  sprintf(Buffer, "NUEVA FECHA: %02u-%02u-%04u", now.day(), now.month(), now.year());
+  tft.println(Buffer);
+  sprintf(Buffer, "NUEVA HORA: %02u:%02u:%02u", now.hour(), now.minute(), now.second());
+  tft.println(Buffer);
+  tft.println("");
+  tft.setTextSize(3);
+  tft.println("DESEA REINICIAR?");
+
+  tft.drawRect(0, 190, 160, 50, ILI9341_WHITE);
+  tft.setCursor(10, 210);
+  tft.setTextColor(ILI9341_RED, ILI9341_BLUE);
+  tft.print("CANCELAR");
+
+  tft.drawRect(160, 190, 160, 50, ILI9341_WHITE);
+  tft.setCursor(175, 210);
+  tft.setTextColor(ILI9341_GREEN, ILI9341_BLUE);
+  tft.print("ACEPTAR");
+
+  int contAccept = 0;
+  bool cancel = false;
+  bool accept = false;
+  while (contAccept < 3 && !cancel) {
+    if (ts.touched()) {
+      TS_Point p = catchPoint();
+
+      if ((0 < p.x && p.x < 160) &&  p.y < 50) {
+        cancel = true;
+      }
+      else if ((160 < p.x && p.x < 320) && p.y < 50) {
+        accept = true;
+      }
+    }
+    else{
+      if (accept) {
+        contAccept += 1;
+        accept = false;
+      }
+    }
+  }
+  
+  if (cancel) {
+    return;
+  }
+  else if (contAccept >= 3) {
+    contador = 0;
+    fechaContador = RTClib::now();
+    EEPROM.put(0, contador);
+    EEPROM.put(100, fechaContador);
+  }
+}
+
 void countVolume() {
-  volumeCount = volumeCount + 1;
+  contador += 1;
+}
+
+TS_Point catchPoint() {
+  TS_Point p = ts.getPoint();
+  long x = map(p.x, 200, 3700, 0, 320);
+  long y = map(p.y, 500, 3700, 240, 0);
+  TS_Point np = TS_Point(x, y, p.z);
+  return np;
 }
