@@ -112,7 +112,7 @@ void loop() {
   }
   digitalWrite(out_TDS, flushing);
 
-  if (!NO && NC) {
+  if ((!NO && NC) || flushing) {
     digitalWrite(out_SW, HIGH);
   } else {
     digitalWrite(out_SW, LOW);
