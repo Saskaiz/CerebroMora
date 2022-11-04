@@ -104,7 +104,7 @@ void loop() {
   }
 
   DateTime now = RTClib::now();
-  if ((flushing == false && TDS >= 10.0) || (now.hour() == 1 && now.minute() == 59 && now.second() > 55)) {
+  if ((now.hour() == 1 && now.minute() == 59 && now.second() > 55)) {  // (flushing == false && TDS >= 10.0) ||
     TDSFlushTimer = millis();
     flushing = true;
   } else if (flushing == true && TDSFlushTimer + TDSFlushDuration <= millis()) {
