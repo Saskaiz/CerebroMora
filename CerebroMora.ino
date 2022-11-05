@@ -1,11 +1,11 @@
-/***************************************************
+/*****************
   Primer prototipo desarrollado para el sistema de control
   comisionado por Instrumentos Mora SAS.
   Desarrollado por: Juan David Castillo S.
   Iniciado el 23 de Agosto de 2022
 
   Script planeado para Arduino Uno
- ****************************************************/
+ ******************/
 
 // Librerias necesarias
 #include <SPI.h>
@@ -112,7 +112,7 @@ void loop() {
   }
   digitalWrite(out_TDS, flushing);
 
-  if ((!NO && NC) || flushing) {
+  if ((!NO && !NC) || flushing) { // Ambos circuitos deben estar cerrados para poder prender el rele
     digitalWrite(out_SW, HIGH);
   } else {
     digitalWrite(out_SW, LOW);
@@ -154,7 +154,7 @@ void printMainScreen() {
   tft.println(Buffer);
   tft.println("");
 
-  if (NC) {
+  if (!NO) {
     tft.println("SENSOR PRESION MINIMA ON ");
   } else {
     tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
@@ -162,7 +162,7 @@ void printMainScreen() {
     tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
   }
 
-  if (!NO) {
+  if (!NC) {
     tft.println("SENSOR SOBREPRESION OFF");
   } else {
     tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
