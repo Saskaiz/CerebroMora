@@ -50,7 +50,7 @@ const int TDSFlushDuration = 20000;
 bool flushing = false;
 uint64_t volumen;
 uint64_t contador;
-float conversion = 1;
+float conversion = (1.0 / 3570.0);
 DateTime fechaContador;
 
 void setup() {
@@ -112,7 +112,7 @@ void loop() {
   }
   digitalWrite(out_TDS, flushing);
 
-  if ((!NO && !NC) || flushing) { // Ambos circuitos deben estar cerrados para poder prender el rele
+  if ((!NO && !NC) || flushing) {  // Ambos circuitos deben estar cerrados para poder prender el rele
     digitalWrite(out_SW, HIGH);
   } else {
     digitalWrite(out_SW, LOW);
@@ -138,35 +138,31 @@ void printMainScreen() {
 
   tft.setTextSize(3);
   tft.println("MORAEQUIPOS S.A.S");
-  tft.setTextColor(ILI9341_YELLOW);
-  tft.setTextSize(1);
-  tft.println("Software ver. 1.5.1");
   tft.println("");
 
   tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
   tft.setTextSize(2);
   DateTime now = RTClib::now();
   char Buffer[20];
-  sprintf(Buffer, "%02u-%02u-%04u ", now.day(), now.month(), now.year());
+  sprintf(Buffer, "%02u-%02u-%04u  ", now.day(), now.month(), now.year());
   tft.print(Buffer);
-  tft.print(' ');
-  sprintf(Buffer, "%02u:%02u:%02u ", now.hour(), now.minute(), now.second());
-  tft.println(Buffer);
-  tft.println("");
-
+  sprintf(Buffer, "%02u:%02u", now.hour(), now.minute());
+  tft.print(Buffer);
   if (!NO) {
-    tft.println("SENSOR PRESION MINIMA ON ");
+    tft.println("   PM ON ");
   } else {
     tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
-    tft.println("SENSOR PRESION MINIMA OFF");
+    tft.println("   PM OFF");
     tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
   }
 
+  sprintf(Buffer, "TDS: %04u PPM", TDS);
+  tft.print(Buffer);
   if (!NC) {
-    tft.println("SENSOR SOBREPRESION OFF");
+    tft.println("       SP OFF");
   } else {
     tft.setTextColor(ILI9341_RED, ILI9341_BLACK);
-    tft.println("SENSOR SOBREPRESION ON ");
+    tft.println("       SP ON ");
     tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
   }
 
@@ -178,13 +174,13 @@ void printMainScreen() {
     tft.println("                 ");
   }
 
-  sprintf(Buffer, "TDS: %04u PPM", TDS);
+  tft.setTextSize(4);
+  volumen = contador * conversion;
+  sprintf(Buffer, "%06u L", volumen);
   tft.println(Buffer);
 
+  tft.setTextSize(2);
   tft.println("");
-  volumen = contador * conversion;
-  sprintf(Buffer, "VOLUMEN: %010u", volumen);
-  tft.println(Buffer);
   sprintf(Buffer, "DESDE: %02u-%02u-%04u ", fechaContador.day(), fechaContador.month(), fechaContador.year());
   tft.print(Buffer);
   tft.print(' ');
@@ -192,6 +188,7 @@ void printMainScreen() {
   tft.println(Buffer);
   tft.println("");
 
+  tft.setTextSize(2);
   tft.drawRect(0, 190, 160, 50, ILI9341_WHITE);
   tft.setCursor(10, 210);
   tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
