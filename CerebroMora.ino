@@ -42,11 +42,15 @@ char *btnTitle[col * row] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "BK",
 // Definiciones para la instrumentacion
 bool NO;
 bool NC;
-unsigned long memoryTimer = 0;
-const int memoryFreq = 60000;
+
 unsigned long TDS;
+
+unsigned long memoryTimer;
+const unsigned long memoryInterval = 60000;
+
 unsigned long TDSFlushTimer = 0;
 const int TDSFlushDuration = 20000;
+
 bool flushing = false;
 uint64_t volumen;
 uint64_t contador;
@@ -55,7 +59,7 @@ DateTime fechaContador;
 
 void setup() {
 
-  // Serial.begin(9600);
+  Serial.begin(9600);
   Wire.begin();  // Iniciar comunicacion con el RTC
   pinMode(CS_PIN, OUTPUT);
   pinMode(TFT_CS, OUTPUT);
@@ -85,10 +89,13 @@ void setup() {
     fechaContador = RTClib::now();
     EEPROM.put(0, contador);
     EEPROM.put(100, fechaContador);
+    Serial.println("Nuevo registro iniciado");
   } else {
     EEPROM.get(0, contador);
     EEPROM.get(100, fechaContador);
+    Serial.println("Registro existente cargado");
   }
+  memoryTimer = millis();
 }
 
 void loop() {
@@ -97,10 +104,10 @@ void loop() {
   TDS = map(analogRead(in_TDS), 0, 1023, 0, 1086);
   // Serial.println(TDS);
 
-  if (memoryTimer + memoryFreq < millis()) {
-    EEPROM.update(0, contador);
+  if (millis() - memoryTimer >= memoryInterval) {
+    EEPROM.put(0, contador);
     memoryTimer = millis();
-    // Serial.print("counter saved to EEPROM");
+    Serial.println("Guardado EEPROM intentado");
   }
 
   DateTime now = RTClib::now();
